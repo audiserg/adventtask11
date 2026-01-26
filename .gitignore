@@ -1,0 +1,34 @@
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+.idea/
+
+# Backend
+backend/node_modules/
+backend/.env
+*.log
+*.db
+*.sqlite
+*.sqlite3
+backend/*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary
+*.tmp
+*.temp
+/tmp/
