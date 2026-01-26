@@ -6,6 +6,8 @@ import 'bloc/chat_event.dart';
 import 'models/message.dart';
 import 'widgets/chat_message.dart';
 import 'widgets/chat_input.dart';
+import 'widgets/mcp_tools_panel.dart';
+import 'widgets/mcp_servers_dialog.dart';
 
 void main() {
   runApp(const MyApp());
@@ -41,8 +43,23 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class ChatScreen extends StatelessWidget {
+class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Загружаем MCP инструменты и серверы при инициализации
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ChatBloc>().add(const LoadMcpTools());
+      context.read<ChatBloc>().add(const LoadMcpServers());
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -150,6 +167,22 @@ class ChatScreen extends StatelessWidget {
                   context.read<ChatBloc>().add(const ClearChat());
                 },
               );
+            },
+          ),
+          // MCP инструменты
+          IconButton(
+            icon: const Icon(Icons.build),
+            tooltip: 'MCP инструменты',
+            onPressed: () {
+              _showMcpToolsDialog(context);
+            },
+          ),
+          // Управление MCP серверами
+          IconButton(
+            icon: const Icon(Icons.dns),
+            tooltip: 'Управление MCP серверами',
+            onPressed: () {
+              _showMcpServersDialog(context);
             },
           ),
         ],
@@ -750,6 +783,74 @@ class ChatScreen extends StatelessWidget {
               child: const Text('Очистить'),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  static void _showMcpToolsDialog(BuildContext context) {
+    final chatBloc = context.read<ChatBloc>();
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return BlocProvider.value(
+          value: chatBloc,
+          child: Dialog(
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.9,
+              constraints: const BoxConstraints(maxWidth: 600, maxHeight: 700),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.build),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'MCP Инструменты',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          tooltip: 'Обновить',
+                          onPressed: () {
+                            chatBloc.add(const LoadMcpTools());
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(),
+                  const Expanded(
+                    child: McpToolsPanel(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  static void _showMcpServersDialog(BuildContext context) {
+    final chatBloc = context.read<ChatBloc>();
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return BlocProvider.value(
+          value: chatBloc,
+          child: const McpServersDialog(),
         );
       },
     );

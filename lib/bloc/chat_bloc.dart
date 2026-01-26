@@ -1,5 +1,7 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../models/message.dart';
+import '../models/mcp_tool.dart';
+import '../models/mcp_server.dart';
 import '../services/api_service.dart';
 import '../services/settings_service.dart';
 import 'chat_event.dart';
@@ -27,6 +29,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<UpdateSummarizationThreshold>(_onUpdateSummarizationThreshold);
     on<ToggleMemory>(_onToggleMemory);
     on<ClearMemory>(_onClearMemory);
+    on<LoadMcpTools>(_onLoadMcpTools);
+    on<LoadMcpServers>(_onLoadMcpServers);
+    on<CallMcpTool>(_onCallMcpTool);
+    on<AddMcpServer>(_onAddMcpServer);
+    on<UpdateMcpServer>(_onUpdateMcpServer);
+    on<DeleteMcpServer>(_onDeleteMcpServer);
+    on<TestMcpServer>(_onTestMcpServer);
+    on<ConnectMcpServer>(_onConnectMcpServer);
+    on<DisconnectMcpServer>(_onDisconnectMcpServer);
     
     // Загружаем настройки при инициализации
     _initializeSettings();
@@ -1240,5 +1251,283 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       return (state as ChatLoading).currentTopic;
     }
     return null;
+  }
+
+  // MCP обработчики
+  Future<void> _onLoadMcpTools(LoadMcpTools event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      final tools = await _apiService.getMcpTools(serverId: event.serverId);
+
+      emit(_copyStateWith(
+        mcpTools: tools,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onLoadMcpServers(LoadMcpServers event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      final servers = await _apiService.getMcpServers();
+
+      emit(_copyStateWith(
+        mcpServers: servers,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onCallMcpTool(CallMcpTool event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      final result = await _apiService.callMcpTool(
+        event.toolName,
+        event.serverId,
+        event.args,
+      );
+
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+
+      // Можно добавить логику для отображения результата
+      print('MCP Tool result: $result');
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onAddMcpServer(AddMcpServer event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      final server = await _apiService.addMcpServer(
+        id: event.id,
+        name: event.name,
+        url: event.url,
+        enabled: event.enabled,
+        description: event.description,
+      );
+
+      // Обновляем список серверов
+      final servers = await _apiService.getMcpServers();
+
+      emit(_copyStateWith(
+        mcpServers: servers,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onUpdateMcpServer(UpdateMcpServer event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      await _apiService.updateMcpServer(event.serverId, event.updates);
+
+      // Обновляем список серверов
+      final servers = await _apiService.getMcpServers();
+
+      emit(_copyStateWith(
+        mcpServers: servers,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onDeleteMcpServer(DeleteMcpServer event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      await _apiService.deleteMcpServer(event.serverId);
+
+      // Обновляем список серверов
+      final servers = await _apiService.getMcpServers();
+
+      emit(_copyStateWith(
+        mcpServers: servers,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onTestMcpServer(TestMcpServer event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      final result = await _apiService.testMcpServer(event.serverId);
+
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: result['success'] == true ? null : result['error']?.toString(),
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onConnectMcpServer(ConnectMcpServer event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      await _apiService.connectMcpServer(event.serverId);
+
+      // Обновляем список серверов
+      final servers = await _apiService.getMcpServers();
+
+      emit(_copyStateWith(
+        mcpServers: servers,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  Future<void> _onDisconnectMcpServer(DisconnectMcpServer event, Emitter<ChatState> emit) async {
+    try {
+      emit(_copyStateWith(mcpToolsLoading: true, mcpError: null));
+
+      await _apiService.disconnectMcpServer(event.serverId);
+
+      // Обновляем список серверов
+      final servers = await _apiService.getMcpServers();
+
+      emit(_copyStateWith(
+        mcpServers: servers,
+        mcpToolsLoading: false,
+        mcpError: null,
+      ));
+    } catch (e) {
+      emit(_copyStateWith(
+        mcpToolsLoading: false,
+        mcpError: e.toString(),
+      ));
+    }
+  }
+
+  // Вспомогательный метод для копирования состояния с новыми значениями MCP
+  ChatState _copyStateWith({
+    List<McpTool>? mcpTools,
+    List<McpServer>? mcpServers,
+    bool? mcpToolsLoading,
+    String? mcpError,
+  }) {
+    if (state is ChatLoaded) {
+      final currentState = state as ChatLoaded;
+      return ChatLoaded(
+        currentState.messages,
+        currentTopic: currentState.currentTopic,
+        ltmUsed: currentState.ltmUsed,
+        ltmEmpty: currentState.ltmEmpty,
+        ltmMessagesCount: currentState.ltmMessagesCount,
+        ltmQuery: currentState.ltmQuery,
+        temperature: currentState.temperature,
+        systemPrompt: currentState.systemPrompt,
+        provider: currentState.provider,
+        model: currentState.model,
+        availableModels: currentState.availableModels,
+        summarizationThreshold: currentState.summarizationThreshold,
+        useMemory: currentState.useMemory,
+        mcpTools: mcpTools ?? currentState.mcpTools,
+        mcpServers: mcpServers ?? currentState.mcpServers,
+        mcpToolsLoading: mcpToolsLoading ?? currentState.mcpToolsLoading,
+        mcpError: mcpError ?? currentState.mcpError,
+      );
+    } else if (state is ChatLoading) {
+      final currentState = state as ChatLoading;
+      return ChatLoading(
+        currentState.messages,
+        currentTopic: currentState.currentTopic,
+        temperature: currentState.temperature,
+        systemPrompt: currentState.systemPrompt,
+        provider: currentState.provider,
+        model: currentState.model,
+        availableModels: currentState.availableModels,
+        summarizationThreshold: currentState.summarizationThreshold,
+        useMemory: currentState.useMemory,
+        mcpTools: mcpTools ?? currentState.mcpTools,
+        mcpServers: mcpServers ?? currentState.mcpServers,
+        mcpToolsLoading: mcpToolsLoading ?? currentState.mcpToolsLoading,
+        mcpError: mcpError ?? currentState.mcpError,
+      );
+    } else if (state is ChatError) {
+      final currentState = state as ChatError;
+      return ChatError(
+        currentState.messages,
+        currentState.error,
+        temperature: currentState.temperature,
+        systemPrompt: currentState.systemPrompt,
+        provider: currentState.provider,
+        model: currentState.model,
+        availableModels: currentState.availableModels,
+        summarizationThreshold: currentState.summarizationThreshold,
+        useMemory: currentState.useMemory,
+        mcpTools: mcpTools ?? currentState.mcpTools,
+        mcpServers: mcpServers ?? currentState.mcpServers,
+        mcpToolsLoading: mcpToolsLoading ?? currentState.mcpToolsLoading,
+        mcpError: mcpError ?? currentState.mcpError,
+      );
+    } else {
+      // ChatInitial
+      return ChatInitial(
+        temperature: state.temperature,
+        systemPrompt: state.systemPrompt,
+        provider: state.provider,
+        model: state.model,
+        availableModels: state.availableModels,
+        summarizationThreshold: state.summarizationThreshold,
+        useMemory: state.useMemory,
+        mcpTools: mcpTools ?? state.mcpTools,
+        mcpServers: mcpServers ?? state.mcpServers,
+        mcpToolsLoading: mcpToolsLoading ?? state.mcpToolsLoading,
+        mcpError: mcpError ?? state.mcpError,
+      );
+    }
   }
 }

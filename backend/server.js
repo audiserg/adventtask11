@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import { encoding_for_model } from '@dqbd/tiktoken';
 import * as db from './database.js';
 import { LTMStrategy } from './ltm_strategy.js';
+import * as mcpClient from './mcp-client.js';
+import * as mcpConfig from './mcp-config.js';
 
 dotenv.config();
 
@@ -804,6 +806,57 @@ app.post('/api/chat', async (req, res) => {
     // Используем переданный системный промпт, если он есть
     let messagesWithSystem = messages;
     
+    // Получаем доступные MCP инструменты
+    let mcpToolsPrompt = '';
+    try {
+      const toolsResult = await mcpClient.listAllTools();
+      if (toolsResult.success && toolsResult.tools && toolsResult.tools.length > 0) {
+        mcpToolsPrompt = '\n\n=== ДОСТУПНЫЕ ИНСТРУМЕНТЫ (MCP) ===\n\n';
+        mcpToolsPrompt += 'У вас есть доступ к следующим инструментам через MCP (Model Context Protocol):\n\n';
+        
+        // Группируем инструменты по серверам
+        const toolsByServer = {};
+        for (const tool of toolsResult.tools) {
+          const serverName = tool.serverName || tool.serverId || 'Unknown';
+          if (!toolsByServer[serverName]) {
+            toolsByServer[serverName] = [];
+          }
+          toolsByServer[serverName].push(tool);
+        }
+        
+        for (const [serverName, serverTools] of Object.entries(toolsByServer)) {
+          mcpToolsPrompt += `\n[${serverName}]\n`;
+          for (const tool of serverTools) {
+            mcpToolsPrompt += `\n• ${tool.name}: ${tool.description}\n`;
+            
+            // Добавляем информацию о параметрах
+            const inputSchema = tool.inputSchema || {};
+            const properties = inputSchema.properties || {};
+            const required = inputSchema.required || [];
+            
+            if (Object.keys(properties).length > 0) {
+              mcpToolsPrompt += '  Параметры:\n';
+              for (const [paramName, paramSchema] of Object.entries(properties)) {
+                const isRequired = required.includes(paramName);
+                const paramType = paramSchema.type || 'string';
+                const paramDesc = paramSchema.description || '';
+                mcpToolsPrompt += `    - ${paramName} (${paramType}${isRequired ? ', обязательный' : ', опциональный'}): ${paramDesc}\n`;
+              }
+            }
+            
+            mcpToolsPrompt += `  Использование: **mcp_call**(${tool.name}, serverId="${tool.serverId}", параметры)\n`;
+            mcpToolsPrompt += `  Пример: **mcp_call**(${tool.name}, serverId="${tool.serverId}", {"param1": "value1"})\n`;
+          }
+        }
+        
+        mcpToolsPrompt += '\n\nВАЖНО: Для вызова инструмента используйте формат:\n';
+        mcpToolsPrompt += '**mcp_call**(название_инструмента, serverId="id_сервера", {"параметр1": "значение1", "параметр2": "значение2"})\n\n';
+        mcpToolsPrompt += 'Система автоматически вызовет инструмент и вернет результат. Вы можете использовать результат для ответа пользователю.\n';
+      }
+    } catch (error) {
+      console.error('❌ Error loading MCP tools for system prompt:', error);
+    }
+    
     // Системный промпт для памяти (добавляется автоматически если useMemory=true)
     let memorySystemPrompt = '';
     if (useMemory) {
@@ -823,13 +876,21 @@ app.post('/api/chat', async (req, res) => {
     
     // Объединяем системные промпты
     let finalSystemPrompt = '';
-    if (memorySystemPrompt && systemPrompt && systemPrompt.trim().length > 0) {
-      finalSystemPrompt = `${memorySystemPrompt}\n\n${systemPrompt}`;
-    } else if (memorySystemPrompt) {
-      finalSystemPrompt = memorySystemPrompt;
-    } else if (systemPrompt && systemPrompt.trim().length > 0) {
-      finalSystemPrompt = systemPrompt;
+    const promptParts = [];
+    
+    if (memorySystemPrompt) {
+      promptParts.push(memorySystemPrompt);
     }
+    
+    if (mcpToolsPrompt) {
+      promptParts.push(mcpToolsPrompt);
+    }
+    
+    if (systemPrompt && systemPrompt.trim().length > 0) {
+      promptParts.push(systemPrompt);
+    }
+    
+    finalSystemPrompt = promptParts.join('\n\n');
     
     // Формируем финальный массив сообщений с системным промптом
     if (finalSystemPrompt && finalSystemPrompt.trim().length > 0) {
@@ -861,6 +922,72 @@ app.post('/api/chat', async (req, res) => {
     console.log(`📄 Full response:`);
     console.log(aiResponse);
     console.log('─'.repeat(80));
+    
+    // Обработка вызова MCP инструментов
+    // Формат: **mcp_call**(toolName, serverId="serverId", {"param1": "value1"})
+    const mcpCallPattern = /\*\*mcp_call\*\*\(([^,]+),\s*serverId\s*=\s*"([^"]+)",\s*(\{[^}]+\})\)/;
+    let mcpMatch = aiResponse.match(mcpCallPattern);
+    
+    if (mcpMatch) {
+      const toolName = mcpMatch[1].trim();
+      const serverId = mcpMatch[2].trim();
+      let argsJson = mcpMatch[3].trim();
+      
+      try {
+        // Парсим JSON аргументы
+        const args = JSON.parse(argsJson);
+        
+        console.log(`🔧 MCP tool call detected: ${toolName} on server ${serverId}`);
+        console.log(`📋 Arguments:`, args);
+        
+        // Вызываем инструмент
+        const toolResult = await mcpClient.callTool(serverId, toolName, args);
+        
+        if (toolResult.success) {
+          const resultContent = toolResult.result?.content?.[0]?.text || JSON.stringify(toolResult.result);
+          console.log(`✅ MCP tool result:`, resultContent);
+          
+          // Добавляем результат в контекст и запрашиваем продолжение ответа
+          const toolResultMessage = `Результат выполнения инструмента ${toolName}:\n${resultContent}`;
+          
+          // Добавляем результат в историю сообщений и запрашиваем продолжение
+          const updatedMessages = [
+            ...messagesWithSystem,
+            {
+              role: 'assistant',
+              content: aiResponse.substring(0, mcpMatch.index) + `[Вызван инструмент ${toolName}]`
+            },
+            {
+              role: 'user',
+              content: toolResultMessage + '\n\nПродолжи ответ пользователю, используя результат инструмента.'
+            }
+          ];
+          
+          // Запрашиваем продолжение ответа с результатом инструмента
+          let continuationData;
+          if (selectedProvider === 'huggingface') {
+            continuationData = await sendToHuggingFace(updatedMessages, temperature, selectedModel);
+          } else {
+            continuationData = await sendToDeepSeek(updatedMessages, temperature, selectedModel);
+          }
+          
+          aiResponse = continuationData.choices?.[0]?.message?.content || aiResponse;
+          console.log(`✅ Continuation response received`);
+        } else {
+          console.error(`❌ MCP tool call failed:`, toolResult);
+          aiResponse = aiResponse.replace(
+            mcpMatch[0],
+            `[Ошибка вызова инструмента ${toolName}: ${toolResult.error || 'Unknown error'}]`
+          );
+        }
+      } catch (error) {
+        console.error(`❌ Error calling MCP tool:`, error);
+        aiResponse = aiResponse.replace(
+          mcpMatch[0],
+          `[Ошибка вызова инструмента: ${error.message}]`
+        );
+      }
+    }
     
     // Обработка команды **ltm_search**(query) или **search**(query) в ответе модели
     // Поддерживаем оба варианта для совместимости
@@ -1123,7 +1250,304 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// MCP API endpoints
+// Получение списка всех инструментов
+app.get('/api/mcp/tools', async (req, res) => {
+  try {
+    const serverId = req.query.serverId;
+    
+    if (serverId) {
+      // Получаем инструменты конкретного сервера
+      const result = await mcpClient.listTools(serverId);
+      res.json(result);
+    } else {
+      // Получаем инструменты со всех серверов
+      const result = await mcpClient.listAllTools();
+      res.json(result);
+    }
+  } catch (error) {
+    console.error('❌ Error listing MCP tools:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Выполнение инструмента
+app.post('/api/mcp/tools/:toolName', async (req, res) => {
+  try {
+    const { toolName } = req.params;
+    const { serverId, ...args } = req.body;
+
+    if (!serverId) {
+      return res.status(400).json({
+        success: false,
+        error: 'serverId обязателен',
+      });
+    }
+
+    const result = await mcpClient.callTool(serverId, toolName, args);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error calling MCP tool:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Выполнение инструмента на конкретном сервере (альтернативный endpoint)
+app.post('/api/mcp/servers/:serverId/tools/:toolName', async (req, res) => {
+  try {
+    const { serverId, toolName } = req.params;
+    const args = req.body;
+
+    const result = await mcpClient.callTool(serverId, toolName, args);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error calling MCP tool:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Статус всех подключений
+app.get('/api/mcp/status', async (req, res) => {
+  try {
+    const serverId = req.query.serverId;
+    
+    if (serverId) {
+      const status = mcpClient.getServerStatus(serverId);
+      res.json(status);
+    } else {
+      const statuses = mcpClient.getAllServersStatus();
+      res.json(statuses);
+    }
+  } catch (error) {
+    console.error('❌ Error getting MCP status:', error);
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
+// Управление MCP серверами
+// Получение списка всех серверов
+app.get('/api/mcp/servers', async (req, res) => {
+  try {
+    const servers = mcpConfig.getAllServers();
+    const statuses = mcpClient.getAllServersStatus();
+    
+    // Объединяем конфигурацию с статусами
+    const serversWithStatus = servers.map(server => ({
+      ...server,
+      connectionStatus: statuses[server.id]?.status || 'disconnected',
+      connectedAt: statuses[server.id]?.connectedAt,
+      error: statuses[server.id]?.error,
+    }));
+    
+    res.json({
+      success: true,
+      servers: serversWithStatus,
+    });
+  } catch (error) {
+    console.error('❌ Error getting MCP servers:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Добавление нового сервера
+app.post('/api/mcp/servers', async (req, res) => {
+  try {
+    const { id, name, url, enabled, description } = req.body;
+    
+    if (!id || !name || !url) {
+      return res.status(400).json({
+        success: false,
+        error: 'id, name и url обязательны',
+      });
+    }
+
+    const result = mcpConfig.addServer({
+      id,
+      name,
+      url,
+      enabled: enabled !== undefined ? enabled : true,
+      description: description || '',
+    });
+
+    if (result.success) {
+      // Если сервер включен, подключаемся к нему
+      if (result.server.enabled) {
+        await mcpClient.connect(result.server.id, result.server.url);
+      }
+      
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error('❌ Error adding MCP server:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Обновление сервера
+app.put('/api/mcp/servers/:serverId', async (req, res) => {
+  try {
+    const { serverId } = req.params;
+    const updates = req.body;
+
+    const result = mcpConfig.updateServer(serverId, updates);
+
+    if (result.success) {
+      // Если сервер был отключен, отключаемся
+      if (updates.enabled === false) {
+        await mcpClient.disconnect(serverId);
+      } else if (updates.enabled === true || (updates.enabled === undefined && result.server.enabled)) {
+        // Если сервер включен, переподключаемся
+        await mcpClient.disconnect(serverId);
+        await mcpClient.connect(serverId, result.server.url);
+      } else if (updates.url) {
+        // Если изменился URL, переподключаемся
+        await mcpClient.disconnect(serverId);
+        if (result.server.enabled) {
+          await mcpClient.connect(serverId, result.server.url);
+        }
+      }
+      
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error('❌ Error updating MCP server:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Удаление сервера
+app.delete('/api/mcp/servers/:serverId', async (req, res) => {
+  try {
+    const { serverId } = req.params;
+
+    // Отключаемся от сервера
+    await mcpClient.disconnect(serverId);
+
+    const result = mcpConfig.removeServer(serverId);
+    
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error('❌ Error removing MCP server:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Тестирование подключения к серверу
+app.post('/api/mcp/servers/:serverId/test', async (req, res) => {
+  try {
+    const { serverId } = req.params;
+    const server = mcpConfig.getServer(serverId);
+
+    if (!server) {
+      return res.status(404).json({
+        success: false,
+        error: 'Сервер не найден',
+      });
+    }
+
+    const result = await mcpClient.testConnection(server.url);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error testing MCP server:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Ручное подключение к серверу
+app.post('/api/mcp/servers/:serverId/connect', async (req, res) => {
+  try {
+    const { serverId } = req.params;
+    const server = mcpConfig.getServer(serverId);
+
+    if (!server) {
+      return res.status(404).json({
+        success: false,
+        error: 'Сервер не найден',
+      });
+    }
+
+    const result = await mcpClient.connect(serverId, server.url);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error connecting to MCP server:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Отключение от сервера
+app.post('/api/mcp/servers/:serverId/disconnect', async (req, res) => {
+  try {
+    const { serverId } = req.params;
+    const result = await mcpClient.disconnect(serverId);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Error disconnecting from MCP server:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Инициализация MCP подключений при старте сервера
+async function initializeMCP() {
+  try {
+    console.log('🔌 Инициализация MCP подключений...');
+    const results = await mcpClient.initializeConnections();
+    
+    results.forEach(result => {
+      if (result.success) {
+        console.log(`✅ Подключен к MCP серверу: ${result.serverName} (${result.serverId})`);
+      } else {
+        console.error(`❌ Ошибка подключения к ${result.serverName} (${result.serverId}): ${result.error}`);
+      }
+    });
+  } catch (error) {
+    console.error('❌ Ошибка инициализации MCP:', error);
+  }
+}
+
+app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  
+  // Инициализируем MCP подключения после запуска сервера
+  await initializeMCP();
 });
