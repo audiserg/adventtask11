@@ -1,16 +1,23 @@
 import express from 'express';
+import readline from 'readline';
+import * as bleAdapter from './ble-adapter.js';
 
 const app = express();
-const PORT = process.env.MCP_SERVER_PORT || 3001;
+const PORT = process.env.MCP_SERVER_PORT || 5001;
 
 app.use(express.json());
 
-// Моковые данные для Bluetooth устройств
-const mockDevices = [
-  { id: 'device-1', name: 'Bluetooth Headphones', address: '00:11:22:33:44:55', connected: false },
-  { id: 'device-2', name: 'Wireless Mouse', address: 'AA:BB:CC:DD:EE:FF', connected: true },
-  { id: 'device-3', name: 'Smart Watch', address: '11:22:33:44:55:66', connected: false },
-];
+// Инициализация BLE адаптера при старте
+let bleInitialized = false;
+bleAdapter.initialize().then(result => {
+  if (result.success) {
+    bleInitialized = true;
+    console.log(`✅ BLE adapter initialized for ${result.platform}`);
+  } else {
+    console.warn(`⚠️ BLE adapter initialization failed: ${result.error}`);
+    console.warn('⚠️ Falling back to mock mode');
+  }
+});
 
 // Функция для получения списка инструментов
 async function listTools() {
@@ -42,10 +49,10 @@ async function listTools() {
             },
             deviceAddress: {
               type: 'string',
-              description: 'MAC адрес устройства (альтернатива deviceId)',
+              description: 'MAC адрес устройства (обязателен для подключения)',
             },
           },
-          required: ['deviceId'],
+          required: ['deviceId', 'deviceAddress'],
         },
       },
       {
@@ -58,8 +65,12 @@ async function listTools() {
               type: 'string',
               description: 'ID устройства для отключения',
             },
+            deviceAddress: {
+              type: 'string',
+              description: 'MAC адрес устройства (обязателен для отключения)',
+            },
           },
-          required: ['deviceId'],
+          required: ['deviceId', 'deviceAddress'],
         },
       },
       {
@@ -86,12 +97,16 @@ async function listTools() {
               type: 'string',
               description: 'ID устройства для отправки данных',
             },
+            deviceAddress: {
+              type: 'string',
+              description: 'MAC адрес устройства (обязателен для отправки данных)',
+            },
             data: {
               type: 'string',
               description: 'Данные для отправки (строка или hex)',
             },
           },
-          required: ['deviceId', 'data'],
+          required: ['deviceId', 'deviceAddress', 'data'],
         },
       },
     ],
@@ -105,44 +120,66 @@ async function callTool(name, args) {
     switch (name) {
       case 'bluetooth_scan': {
         const duration = args?.duration || 5;
-        // Имитация сканирования
-        await new Promise(resolve => setTimeout(resolve, Math.min(duration * 100, 1000)));
         
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                devicesFound: mockDevices.length,
-                devices: mockDevices.map(d => ({
-                  id: d.id,
-                  name: d.name,
-                  address: d.address,
-                  rssi: Math.floor(Math.random() * -30) - 50, // Моковый уровень сигнала
-                })),
-                scanDuration: duration,
-              }, null, 2),
-            },
-          ],
-        };
+        if (!bleInitialized) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: 'BLE adapter not initialized. Please check Bluetooth permissions and system requirements.',
+                }, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        try {
+          const result = await bleAdapter.scan(duration);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: error.message,
+                }, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
       }
 
       case 'bluetooth_connect': {
         const deviceId = args?.deviceId || args?.deviceAddress;
-        if (!deviceId) {
-          throw new Error('deviceId или deviceAddress обязателен');
+        const deviceAddress = args?.deviceAddress || deviceId;
+        
+        if (!deviceId || !deviceAddress) {
+          throw new Error('deviceId и deviceAddress обязательны');
         }
 
-        const device = mockDevices.find(d => d.id === deviceId || d.address === deviceId);
-        if (!device) {
+        if (!bleInitialized) {
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
                   success: false,
-                  error: `Устройство с ID ${deviceId} не найдено`,
+                  error: 'BLE adapter not initialized',
                 }, null, 2),
               },
             ],
@@ -150,59 +187,50 @@ async function callTool(name, args) {
           };
         }
 
-        if (device.connected) {
+        try {
+          const result = await bleAdapter.connect(deviceId, deviceAddress);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
                   success: false,
-                  error: `Устройство ${device.name} уже подключено`,
+                  error: error.message,
                 }, null, 2),
               },
             ],
             isError: true,
           };
         }
-
-        // Имитация подключения
-        await new Promise(resolve => setTimeout(resolve, 500));
-        device.connected = true;
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                device: {
-                  id: device.id,
-                  name: device.name,
-                  address: device.address,
-                  connected: true,
-                },
-                message: `Успешно подключено к ${device.name}`,
-              }, null, 2),
-            },
-          ],
-        };
       }
 
       case 'bluetooth_disconnect': {
         const deviceId = args?.deviceId;
-        if (!deviceId) {
-          throw new Error('deviceId обязателен');
+        const deviceAddress = args?.deviceAddress || deviceId;
+        
+        if (!deviceId || !deviceAddress) {
+          throw new Error('deviceId и deviceAddress обязательны');
         }
 
-        const device = mockDevices.find(d => d.id === deviceId);
-        if (!device) {
+        if (!bleInitialized) {
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
                   success: false,
-                  error: `Устройство с ID ${deviceId} не найдено`,
+                  error: 'BLE adapter not initialized',
                 }, null, 2),
               },
             ],
@@ -210,87 +238,99 @@ async function callTool(name, args) {
           };
         }
 
-        if (!device.connected) {
+        try {
+          const result = await bleAdapter.disconnect(deviceId, deviceAddress);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
                   success: false,
-                  error: `Устройство ${device.name} не подключено`,
+                  error: error.message,
                 }, null, 2),
               },
             ],
             isError: true,
           };
         }
-
-        device.connected = false;
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                device: {
-                  id: device.id,
-                  name: device.name,
-                  address: device.address,
-                  connected: false,
-                },
-                message: `Отключено от ${device.name}`,
-              }, null, 2),
-            },
-          ],
-        };
       }
 
       case 'bluetooth_get_devices': {
         const connectedOnly = args?.connectedOnly || false;
-        let devices = mockDevices;
 
-        if (connectedOnly) {
-          devices = mockDevices.filter(d => d.connected);
+        if (!bleInitialized) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: 'BLE adapter not initialized',
+                  devices: [],
+                }, null, 2),
+              },
+            ],
+            isError: true,
+          };
         }
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                devices: devices.map(d => ({
-                  id: d.id,
-                  name: d.name,
-                  address: d.address,
-                  connected: d.connected,
-                })),
-                total: devices.length,
-                connected: devices.filter(d => d.connected).length,
-              }, null, 2),
-            },
-          ],
-        };
+        try {
+          const result = await bleAdapter.getDevices(connectedOnly);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: error.message,
+                  devices: [],
+                }, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
       }
 
       case 'bluetooth_send_data': {
         const deviceId = args?.deviceId;
+        const deviceAddress = args?.deviceAddress || deviceId;
         const data = args?.data;
 
-        if (!deviceId || !data) {
-          throw new Error('deviceId и data обязательны');
+        if (!deviceId || !deviceAddress || !data) {
+          throw new Error('deviceId, deviceAddress и data обязательны');
         }
 
-        const device = mockDevices.find(d => d.id === deviceId);
-        if (!device) {
+        if (!bleInitialized) {
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
                   success: false,
-                  error: `Устройство с ID ${deviceId} не найдено`,
+                  error: 'BLE adapter not initialized',
                 }, null, 2),
               },
             ],
@@ -298,41 +338,32 @@ async function callTool(name, args) {
           };
         }
 
-        if (!device.connected) {
+        try {
+          const result = await bleAdapter.sendData(deviceId, deviceAddress, data);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
                   success: false,
-                  error: `Устройство ${device.name} не подключено`,
+                  error: error.message,
                 }, null, 2),
               },
             ],
             isError: true,
           };
         }
-
-        // Имитация отправки данных
-        await new Promise(resolve => setTimeout(resolve, 200));
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                device: {
-                  id: device.id,
-                  name: device.name,
-                },
-                dataSent: data,
-                bytesSent: Buffer.from(data).length,
-                message: `Данные успешно отправлены на ${device.name}`,
-              }, null, 2),
-            },
-          ],
-        };
       }
 
       default:
@@ -385,9 +416,82 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', server: 'bluetooth-mcp-server' });
 });
 
-// Запуск сервера
-app.listen(PORT, () => {
-  console.log(`Bluetooth MCP Server запущен на порту ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
-});
+// --- Stdio MCP transport (для Cursor mcp.json: command + args) ---
+const USE_STDIO = process.argv.includes('--stdio');
+
+function writeStdioMessage(obj) {
+  console.log(JSON.stringify(obj));
+}
+
+async function handleStdioRequest(msg) {
+  const { id, method, params } = msg;
+  if (id === undefined && !msg.method?.startsWith('notifications/')) return;
+
+  try {
+    if (method === 'initialize') {
+      return {
+        jsonrpc: '2.0',
+        id,
+        result: {
+          protocolVersion: '2024-11-05',
+          serverInfo: { name: 'bluetooth-mcp-server', version: '1.0.0' },
+          capabilities: { tools: {} },
+        },
+      };
+    }
+    if (method === 'notifications/initialized') return null;
+
+    if (method === 'tools/list') {
+      const list = await listTools();
+      return { jsonrpc: '2.0', id, result: list };
+    }
+    if (method === 'tools/call') {
+      const { name, arguments: args } = params || {};
+      const result = await callTool(name, args || {});
+      return { jsonrpc: '2.0', id, result };
+    }
+
+    return {
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32601, message: `Method not found: ${method}` },
+    };
+  } catch (err) {
+    return {
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32603, message: err.message || String(err) },
+    };
+  }
+}
+
+function runStdioServer() {
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+
+  rl.on('line', async (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      writeStdioMessage({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      return;
+    }
+    const response = await handleStdioRequest(msg);
+    if (response) writeStdioMessage(response);
+  });
+}
+
+// Запуск: HTTP или stdio
+if (USE_STDIO) {
+  runStdioServer().catch((err) => {
+    console.error('Stdio MCP error:', err);
+    process.exit(1);
+  });
+} else {
+  app.listen(PORT, () => {
+    console.log(`Bluetooth MCP Server запущен на порту ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
+    console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+  });
+}

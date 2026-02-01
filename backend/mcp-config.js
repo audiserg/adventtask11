@@ -9,15 +9,7 @@ const CONFIG_FILE = path.join(__dirname, 'mcp-servers.json');
 
 // Структура конфигурации
 const DEFAULT_CONFIG = {
-  servers: [
-    {
-      id: 'local-bluetooth',
-      name: 'Local Bluetooth MCP',
-      url: 'http://localhost:3001',
-      enabled: true,
-      description: 'Локальный MCP сервер с моком Bluetooth адаптера',
-    },
-  ],
+  servers: [],
 };
 
 /**
@@ -82,32 +74,43 @@ export function getServer(serverId) {
 export function addServer(serverConfig) {
   const config = loadConfig();
   
-  // Валидация
-  if (!serverConfig.id || !serverConfig.name || !serverConfig.url) {
-    return { success: false, error: 'id, name и url обязательны' };
+  if (!serverConfig.id || !serverConfig.name) {
+    return { success: false, error: 'id и name обязательны' };
   }
-  
-  // Проверка на дубликаты
   if (config.servers.find(s => s.id === serverConfig.id)) {
     return { success: false, error: `Сервер с ID ${serverConfig.id} уже существует` };
   }
-  
-  // Валидация URL
-  try {
-    new URL(serverConfig.url);
-  } catch (error) {
-    return { success: false, error: 'Некорректный URL' };
+
+  const hasUrl = serverConfig.url != null && String(serverConfig.url).trim() !== '';
+  const hasCommand = serverConfig.command != null && String(serverConfig.command).trim() !== '';
+  if (!hasUrl && !hasCommand) {
+    return { success: false, error: 'Укажите url или command' };
   }
-  
-  // Устанавливаем значения по умолчанию
+  if (hasUrl && hasCommand) {
+    return { success: false, error: 'Укажите либо url, либо command+args' };
+  }
+  if (hasUrl) {
+    try {
+      new URL(serverConfig.url);
+    } catch (error) {
+      return { success: false, error: 'Некорректный URL' };
+    }
+  }
+
   const newServer = {
     id: serverConfig.id,
     name: serverConfig.name,
-    url: serverConfig.url,
     enabled: serverConfig.enabled !== undefined ? serverConfig.enabled : true,
     description: serverConfig.description || '',
   };
-  
+  if (hasUrl) {
+    newServer.url = serverConfig.url.trim();
+  } else {
+    newServer.command = serverConfig.command.trim();
+    newServer.args = Array.isArray(serverConfig.args) ? serverConfig.args : [];
+    newServer.env = serverConfig.env && typeof serverConfig.env === 'object' ? serverConfig.env : {};
+  }
+
   config.servers.push(newServer);
   const result = saveConfig(config);
   
@@ -138,8 +141,7 @@ export function updateServer(serverId, updates) {
     }
   }
   
-  // Обновляем только разрешенные поля
-  const allowedFields = ['name', 'url', 'enabled', 'description'];
+  const allowedFields = ['name', 'url', 'enabled', 'description', 'command', 'args', 'env'];
   for (const field of allowedFields) {
     if (updates[field] !== undefined) {
       config.servers[serverIndex][field] = updates[field];
@@ -164,11 +166,6 @@ export function removeServer(serverId) {
   
   if (serverIndex === -1) {
     return { success: false, error: `Сервер с ID ${serverId} не найден` };
-  }
-  
-  // Не позволяем удалить локальный сервер
-  if (serverId === 'local-bluetooth') {
-    return { success: false, error: 'Нельзя удалить локальный сервер' };
   }
   
   const removedServer = config.servers[serverIndex];

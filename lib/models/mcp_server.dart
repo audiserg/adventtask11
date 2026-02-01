@@ -7,6 +7,8 @@ class McpServer {
   final String? connectionStatus;
   final DateTime? connectedAt;
   final String? error;
+  final String? command;
+  final List<String>? args;
 
   McpServer({
     required this.id,
@@ -17,13 +19,17 @@ class McpServer {
     this.connectionStatus,
     this.connectedAt,
     this.error,
+    this.command,
+    this.args,
   });
+
+  bool get isStdio => command != null && command!.isNotEmpty;
 
   factory McpServer.fromJson(Map<String, dynamic> json) {
     return McpServer(
       id: json['id'] as String,
       name: json['name'] as String,
-      url: json['url'] as String,
+      url: json['url'] as String? ?? '',
       enabled: json['enabled'] as bool,
       description: json['description'] as String? ?? '',
       connectionStatus: json['connectionStatus'] as String?,
@@ -31,6 +37,8 @@ class McpServer {
           ? DateTime.parse(json['connectedAt'] as String)
           : null,
       error: json['error'] as String?,
+      command: (json['command'] as String?)?.isNotEmpty == true ? json['command'] as String? : null,
+      args: json['args'] is List ? List<String>.from(json['args'] as List) : null,
     );
   }
 
@@ -56,6 +64,8 @@ class McpServer {
     String? connectionStatus,
     DateTime? connectedAt,
     String? error,
+    String? command,
+    List<String>? args,
   }) {
     return McpServer(
       id: id ?? this.id,
@@ -66,6 +76,8 @@ class McpServer {
       connectionStatus: connectionStatus ?? this.connectionStatus,
       connectedAt: connectedAt ?? this.connectedAt,
       error: error ?? this.error,
+      command: command ?? this.command,
+      args: args ?? this.args,
     );
   }
 

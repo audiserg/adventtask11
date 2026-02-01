@@ -151,7 +151,7 @@ class McpServersDialog extends StatelessWidget {
                       controller: urlController,
                       decoration: const InputDecoration(
                         labelText: 'URL *',
-                        hintText: 'http://localhost:3001',
+                        hintText: 'http://localhost:5001',
                         border: OutlineInputBorder(),
                       ),
                     ),

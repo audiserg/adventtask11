@@ -28,26 +28,24 @@ class ApiService {
           )
           .toList();
 
-      final requestBody = <String, dynamic>{
-        'messages': messagesJson,
-      };
-      
+      final requestBody = <String, dynamic>{'messages': messagesJson};
+
       if (temperature != null) {
         requestBody['temperature'] = temperature;
       }
-      
+
       if (systemPrompt != null && systemPrompt.isNotEmpty) {
         requestBody['systemPrompt'] = systemPrompt;
       }
-      
+
       if (provider != null && provider.isNotEmpty) {
         requestBody['provider'] = provider;
       }
-      
+
       if (model != null && model.isNotEmpty) {
         requestBody['model'] = model;
       }
-      
+
       if (useMemory != null) {
         requestBody['useMemory'] = useMemory;
       }
@@ -75,28 +73,30 @@ class ApiService {
           if (choice is Map<String, dynamic> && choice.containsKey('message')) {
             final message = choice['message'] as Map<String, dynamic>;
             final content = message['content'] as String? ?? 'No response';
-            
+
             // Извлекаем информацию о токенах
             Map<String, dynamic>? tokenUsage;
             if (data.containsKey('tokenUsage') && data['tokenUsage'] is Map) {
               tokenUsage = data['tokenUsage'] as Map<String, dynamic>;
             }
-            
+
             // Извлекаем информацию о LTM
             final ltmUsed = data['ltmUsed'] as bool?;
             final ltmEmpty = data['ltmEmpty'] as bool?;
             final ltmMessagesCount = data['ltmMessagesCount'] as int?;
             final ltmQuery = data['ltmQuery'] as String?;
-            
+
             // Отладочный вывод
             print('=== API SERVICE LTM DEBUG ===');
-            print('ltmUsed from API: ${data['ltmUsed']} (type: ${data['ltmUsed'].runtimeType})');
+            print(
+              'ltmUsed from API: ${data['ltmUsed']} (type: ${data['ltmUsed'].runtimeType})',
+            );
             print('ltmUsed parsed: $ltmUsed (type: ${ltmUsed.runtimeType})');
             print('ltmEmpty: $ltmEmpty');
             print('ltmMessagesCount: $ltmMessagesCount');
             print('ltmQuery: $ltmQuery');
             print('============================');
-            
+
             return {
               'content': content,
               'tokenUsage': tokenUsage,
@@ -208,7 +208,9 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final success = data['success'] as bool? ?? false;
         final deletedCount = data['deletedCount'] as int? ?? 0;
-        print('ApiService: Clear memory result - success: $success, deleted: $deletedCount');
+        print(
+          'ApiService: Clear memory result - success: $success, deleted: $deletedCount',
+        );
         return success;
       } else {
         String errorMessage = 'Failed to clear memory: ${response.statusCode}';
@@ -255,7 +257,8 @@ class ApiService {
         }
         return [];
       } else {
-        String errorMessage = 'Failed to get memory messages: ${response.statusCode}';
+        String errorMessage =
+            'Failed to get memory messages: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
@@ -276,7 +279,11 @@ class ApiService {
   }
 
   // Сохранение сообщения в память
-  Future<bool> saveMessageToMemory(String role, String content, {bool isSummarization = false}) async {
+  Future<bool> saveMessageToMemory(
+    String role,
+    String content, {
+    bool isSummarization = false,
+  }) async {
     try {
       final response = await http
           .post(
@@ -299,7 +306,8 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data['success'] as bool? ?? false;
       } else {
-        String errorMessage = 'Failed to save message to memory: ${response.statusCode}';
+        String errorMessage =
+            'Failed to save message to memory: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
@@ -338,7 +346,8 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data['count'] as int? ?? 0;
       } else {
-        String errorMessage = 'Failed to get memory count: ${response.statusCode}';
+        String errorMessage =
+            'Failed to get memory count: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
@@ -370,7 +379,10 @@ class ApiService {
       final response = await http
           .get(
             Uri.parse(url),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache',
+            },
           )
           .timeout(
             const Duration(seconds: 30),
@@ -379,7 +391,8 @@ class ApiService {
             },
           );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 304) {
+        if (response.body.isEmpty) return [];
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['success'] == true && data['tools'] != null) {
           final toolsList = data['tools'] as List;
@@ -394,7 +407,7 @@ class ApiService {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -420,10 +433,7 @@ class ApiService {
           .post(
             Uri.parse('$baseUrl/api/mcp/tools/$toolName'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'serverId': serverId,
-              ...args,
-            }),
+            body: jsonEncode({'serverId': serverId, ...args}),
           )
           .timeout(
             const Duration(seconds: 60),
@@ -441,7 +451,7 @@ class ApiService {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -465,10 +475,7 @@ class ApiService {
       }
 
       final response = await http
-          .get(
-            Uri.parse(url),
-            headers: {'Content-Type': 'application/json'},
-          )
+          .get(Uri.parse(url), headers: {'Content-Type': 'application/json'})
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
@@ -480,12 +487,13 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data;
       } else {
-        String errorMessage = 'Failed to get MCP status: ${response.statusCode}';
+        String errorMessage =
+            'Failed to get MCP status: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -507,7 +515,10 @@ class ApiService {
       final response = await http
           .get(
             Uri.parse('$baseUrl/api/mcp/servers'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache',
+            },
           )
           .timeout(
             const Duration(seconds: 30),
@@ -516,22 +527,26 @@ class ApiService {
             },
           );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 304) {
+        if (response.body.isEmpty) return [];
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['success'] == true && data['servers'] != null) {
           final serversList = data['servers'] as List;
           return serversList
-              .map((server) => McpServer.fromJson(server as Map<String, dynamic>))
+              .map(
+                (server) => McpServer.fromJson(server as Map<String, dynamic>),
+              )
               .toList();
         }
         return [];
       } else {
-        String errorMessage = 'Failed to get MCP servers: ${response.statusCode}';
+        String errorMessage =
+            'Failed to get MCP servers: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -581,12 +596,13 @@ class ApiService {
         }
         throw Exception('Invalid response format');
       } else {
-        String errorMessage = 'Failed to add MCP server: ${response.statusCode}';
+        String errorMessage =
+            'Failed to add MCP server: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -627,12 +643,13 @@ class ApiService {
         }
         throw Exception('Invalid response format');
       } else {
-        String errorMessage = 'Failed to update MCP server: ${response.statusCode}';
+        String errorMessage =
+            'Failed to update MCP server: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -666,12 +683,13 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data['success'] as bool? ?? false;
       } else {
-        String errorMessage = 'Failed to delete MCP server: ${response.statusCode}';
+        String errorMessage =
+            'Failed to delete MCP server: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -705,12 +723,13 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data;
       } else {
-        String errorMessage = 'Failed to test MCP server: ${response.statusCode}';
+        String errorMessage =
+            'Failed to test MCP server: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -744,12 +763,137 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data;
       } else {
-        String errorMessage = 'Failed to connect to MCP server: ${response.statusCode}';
+        String errorMessage =
+            'Failed to connect to MCP server: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
+              errorMessage;
+        } catch (_) {
+          errorMessage = '${response.statusCode}: ${response.body}';
+        }
+        throw Exception(errorMessage);
+      }
+    } catch (e) {
+      if (e is Exception) {
+        rethrow;
+      }
+      throw Exception('Network error: $e');
+    }
+  }
+
+  // Редактор mcp.json (формат Cursor)
+  Future<String> getCursorMcpConfig() async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/cursor-mcp-config'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache',
+            },
+          )
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {
+              throw Exception('Request timeout');
+            },
+          );
+
+      if (response.statusCode == 200 || response.statusCode == 304) {
+        if (response.body.isEmpty) {
+          return '{\n  "mcpServers": {}\n}';
+        }
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return data['raw'] as String? ?? '{\n  "mcpServers": {}\n}';
+      } else {
+        String errorMessage = 'Failed to get mcp.json: ${response.statusCode}';
+        try {
+          final errorData = jsonDecode(response.body) as Map<String, dynamic>;
+          errorMessage =
+              errorData['message'] as String? ??
+              errorData['error'] as String? ??
+              errorMessage;
+        } catch (_) {
+          errorMessage = '${response.statusCode}: ${response.body}';
+        }
+        throw Exception(errorMessage);
+      }
+    } catch (e) {
+      if (e is Exception) {
+        rethrow;
+      }
+      throw Exception('Network error: $e');
+    }
+  }
+
+  /// Подгружает серверы с url из cursor-mcp.json в приложение и подключается к ним.
+  Future<Map<String, dynamic>> syncMcpServersFromCursorConfig() async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/mcp/servers/sync-from-cursor-config'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({}),
+          )
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {
+              throw Exception('Request timeout');
+            },
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return data;
+      } else {
+        String errorMessage = 'Sync failed: ${response.statusCode}';
+        try {
+          final errorData = jsonDecode(response.body) as Map<String, dynamic>;
+          errorMessage =
+              errorData['message'] as String? ??
+              errorData['error'] as String? ??
+              errorMessage;
+        } catch (_) {
+          errorMessage = '${response.statusCode}: ${response.body}';
+        }
+        throw Exception(errorMessage);
+      }
+    } catch (e) {
+      if (e is Exception) {
+        rethrow;
+      }
+      throw Exception('Network error: $e');
+    }
+  }
+
+  Future<String> saveCursorMcpConfig(String rawJson) async {
+    try {
+      final response = await http
+          .put(
+            Uri.parse('$baseUrl/api/cursor-mcp-config'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'raw': rawJson}),
+          )
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {
+              throw Exception('Request timeout');
+            },
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return data['raw'] as String? ?? rawJson;
+      } else {
+        String errorMessage = 'Failed to save mcp.json: ${response.statusCode}';
+        try {
+          final errorData = jsonDecode(response.body) as Map<String, dynamic>;
+          errorMessage =
+              errorData['message'] as String? ??
+              errorData['error'] as String? ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';
@@ -783,12 +927,13 @@ class ApiService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data;
       } else {
-        String errorMessage = 'Failed to disconnect from MCP server: ${response.statusCode}';
+        String errorMessage =
+            'Failed to disconnect from MCP server: ${response.statusCode}';
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
           errorMessage =
               errorData['message'] as String? ??
-              errorData['error'] as String??
+              errorData['error'] as String ??
               errorMessage;
         } catch (_) {
           errorMessage = '${response.statusCode}: ${response.body}';

@@ -14,12 +14,21 @@ class McpTool {
   });
 
   factory McpTool.fromJson(Map<String, dynamic> json) {
+    final rawName = json['name'];
+    final rawDesc = json['description'];
+    final rawSchema = json['inputSchema'];
+    Map<String, dynamic> schema = const {};
+    if (rawSchema is Map) {
+      try {
+        schema = Map<String, dynamic>.from(rawSchema);
+      } catch (_) {}
+    }
     return McpTool(
-      name: json['name'] as String,
-      description: json['description'] as String,
-      inputSchema: json['inputSchema'] as Map<String, dynamic>,
-      serverId: json['serverId'] as String?,
-      serverName: json['serverName'] as String?,
+      name: rawName is String ? rawName : (rawName?.toString() ?? ''),
+      description: rawDesc is String ? rawDesc : (rawDesc?.toString() ?? ''),
+      inputSchema: schema,
+      serverId: json['serverId'] is String ? json['serverId'] as String? : null,
+      serverName: json['serverName'] is String ? json['serverName'] as String? : null,
     );
   }
 

@@ -142,7 +142,10 @@ class McpToolsPanel extends StatelessWidget {
 
   void _showToolDialog(BuildContext context, McpTool tool) {
     final argsController = <String, TextEditingController>{};
-    final inputSchema = tool.inputSchema['properties'] as Map<String, dynamic>? ?? {};
+    final rawProps = tool.inputSchema['properties'];
+    final inputSchema = rawProps is Map
+        ? Map<String, dynamic>.from(rawProps)
+        : <String, dynamic>{};
 
     // Создаем контроллеры для каждого параметра
     for (final entry in inputSchema.entries) {

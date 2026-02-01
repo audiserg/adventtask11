@@ -8,6 +8,7 @@ import 'widgets/chat_message.dart';
 import 'widgets/chat_input.dart';
 import 'widgets/mcp_tools_panel.dart';
 import 'widgets/mcp_servers_dialog.dart';
+import 'widgets/mcp_json_editor.dart';
 
 void main() {
   runApp(const MyApp());
@@ -183,6 +184,23 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: 'Управление MCP серверами',
             onPressed: () {
               _showMcpServersDialog(context);
+            },
+          ),
+          // Редактор mcp.json
+          IconButton(
+            icon: const Icon(Icons.code),
+            tooltip: 'Редактор mcp.json',
+            onPressed: () {
+              final chatBloc = context.read<ChatBloc>();
+              showDialog(
+                context: context,
+                builder: (context) => McpJsonEditor(
+                  onSyncDone: () {
+                    chatBloc.add(const LoadMcpServers());
+                    chatBloc.add(const LoadMcpTools());
+                  },
+                ),
+              );
             },
           ),
         ],

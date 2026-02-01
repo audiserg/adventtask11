@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "bluetooth": {
+      "url": "http://localhost:5001"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
+    }
+  }
+}

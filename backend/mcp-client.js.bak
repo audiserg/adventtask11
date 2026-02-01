@@ -186,16 +186,9 @@ export async function connectStdio(serverId, { command, args = [], env = {} }) {
     await listTools(serverId);
     return { success: true };
   } catch (error) {
-    console.error('[MCP stdio ' + serverId + '] Connection error:', error.message);
     if (connections.has(serverId)) {
       const conn = connections.get(serverId);
-      if (conn.process) {
-        try {
-          conn.process.kill('SIGKILL');
-        } catch (killErr) {
-          // Ignore kill errors
-        }
-      }
+      if (conn.process) conn.process.kill();
       connections.delete(serverId);
     }
     return { success: false, error: error.message };

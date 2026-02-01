@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { encoding_for_model } from '@dqbd/tiktoken';
 import * as db from './database.js';
 import { LTMStrategy } from './ltm_strategy.js';
@@ -8,6 +11,12 @@ import * as mcpClient from './mcp-client.js';
 import * as mcpConfig from './mcp-config.js';
 
 dotenv.config();
+
+const VERBOSE_LOG = process.env.LOG_VERBOSE === '1' || process.env.VERBOSE_LOG === '1';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CURSOR_MCP_FILE = path.join(__dirname, 'cursor-mcp.json');
+const DEFAULT_CURSOR_MCP = { mcpServers: {} };
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -74,11 +83,12 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000); // Каждый час
 
-// Middleware
+// Middleware CORS — для Flutter Web (разные порты) обязателен
 app.use(cors({
-  origin: '*', // В production укажите конкретный домен
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: true, // отражать запросующий origin
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
+  credentials: false,
 }));
 // Увеличиваем лимит размера тела запроса для больших сообщений (50MB)
 app.use(express.json({ limit: '50mb' }));
@@ -88,12 +98,31 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use((req, res, next) => {
   const start = Date.now();
   const timestamp = new Date().toISOString();
-  
+
   res.on('finish', () => {
     const duration = Date.now() - start;
-    console.log(`[${timestamp}] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${duration}ms)`);
+    const line = `[${timestamp}] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${duration}ms)`;
+    if (VERBOSE_LOG) {
+      const parts = [line];
+      if (Object.keys(req.query || {}).length > 0) {
+        parts.push(`  query: ${JSON.stringify(req.query)}`);
+      }
+      if (req.body !== undefined && req.method !== 'GET' && req.method !== 'OPTIONS') {
+        const body = req.body;
+        if (typeof body === 'object') {
+          const keys = Object.keys(body);
+          const preview = keys.length > 5
+            ? `{ ${keys.slice(0, 5).join(', ')}, ... } (${keys.length} keys)`
+            : JSON.stringify(body).slice(0, 200) + (JSON.stringify(body).length > 200 ? '...' : '');
+          parts.push(`  body: ${preview}`);
+        }
+      }
+      console.log(parts.join('\n'));
+    } else {
+      console.log(line);
+    }
   });
-  
+
   next();
 });
 
@@ -1253,6 +1282,7 @@ app.post('/api/chat', async (req, res) => {
 // MCP API endpoints
 // Получение списка всех инструментов
 app.get('/api/mcp/tools', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   try {
     const serverId = req.query.serverId;
     
@@ -1338,17 +1368,23 @@ app.get('/api/mcp/status', async (req, res) => {
 // Управление MCP серверами
 // Получение списка всех серверов
 app.get('/api/mcp/servers', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   try {
     const servers = mcpConfig.getAllServers();
     const statuses = mcpClient.getAllServersStatus();
     
-    // Объединяем конфигурацию с статусами
-    const serversWithStatus = servers.map(server => ({
-      ...server,
-      connectionStatus: statuses[server.id]?.status || 'disconnected',
-      connectedAt: statuses[server.id]?.connectedAt,
-      error: statuses[server.id]?.error,
-    }));
+    const serversWithStatus = servers.map(server => {
+      const base = {
+        ...server,
+        connectionStatus: statuses[server.id]?.status || 'disconnected',
+        connectedAt: statuses[server.id]?.connectedAt,
+        error: statuses[server.id]?.error,
+      };
+      if (base.url == null && base.command) {
+        base.url = `stdio:${base.command}`;
+      }
+      return base;
+    });
     
     res.json({
       success: true,
@@ -1363,42 +1399,48 @@ app.get('/api/mcp/servers', async (req, res) => {
   }
 });
 
-// Добавление нового сервера
+// Добавление нового сервера (url или command+args)
 app.post('/api/mcp/servers', async (req, res) => {
   try {
-    const { id, name, url, enabled, description } = req.body;
-    
-    if (!id || !name || !url) {
-      return res.status(400).json({
-        success: false,
-        error: 'id, name и url обязательны',
-      });
+    const { id, name, url, command, args, env, enabled, description } = req.body;
+    if (!id || !name) {
+      return res.status(400).json({ success: false, error: 'id и name обязательны' });
     }
 
     const result = mcpConfig.addServer({
       id,
       name,
-      url,
+      url: url || undefined,
+      command: command || undefined,
+      args: args || [],
+      env: env || {},
       enabled: enabled !== undefined ? enabled : true,
       description: description || '',
     });
 
-    if (result.success) {
-      // Если сервер включен, подключаемся к нему
-      if (result.server.enabled) {
-        await mcpClient.connect(result.server.id, result.server.url);
+    if (result.success && result.server.enabled) {
+      try {
+        if (result.server.url) {
+          await mcpClient.connect(result.server.id, result.server.url);
+        } else if (result.server.command) {
+          await mcpClient.connectStdio(result.server.id, {
+            command: result.server.command,
+            args: result.server.args || [],
+            env: result.server.env || {},
+          });
+        }
+      } catch (connErr) {
+        console.warn(`Подключение к ${result.server.id} не удалось:`, connErr.message);
       }
-      
+      res.json(result);
+    } else if (result.success) {
       res.json(result);
     } else {
       res.status(400).json(result);
     }
   } catch (error) {
     console.error('❌ Error adding MCP server:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -1411,21 +1453,22 @@ app.put('/api/mcp/servers/:serverId', async (req, res) => {
     const result = mcpConfig.updateServer(serverId, updates);
 
     if (result.success) {
-      // Если сервер был отключен, отключаемся
-      if (updates.enabled === false) {
-        await mcpClient.disconnect(serverId);
-      } else if (updates.enabled === true || (updates.enabled === undefined && result.server.enabled)) {
-        // Если сервер включен, переподключаемся
-        await mcpClient.disconnect(serverId);
-        await mcpClient.connect(serverId, result.server.url);
-      } else if (updates.url) {
-        // Если изменился URL, переподключаемся
-        await mcpClient.disconnect(serverId);
-        if (result.server.enabled) {
-          await mcpClient.connect(serverId, result.server.url);
+      await mcpClient.disconnect(serverId);
+      if (updates.enabled !== false && result.server.enabled) {
+        try {
+          if (result.server.url) {
+            await mcpClient.connect(serverId, result.server.url);
+          } else if (result.server.command) {
+            await mcpClient.connectStdio(serverId, {
+              command: result.server.command,
+              args: result.server.args || [],
+              env: result.server.env || {},
+            });
+          }
+        } catch (connErr) {
+          console.warn(`Переподключение к ${serverId} не удалось:`, connErr.message);
         }
       }
-      
       res.json(result);
     } else {
       res.status(400).json(result);
@@ -1492,22 +1535,25 @@ app.post('/api/mcp/servers/:serverId/connect', async (req, res) => {
   try {
     const { serverId } = req.params;
     const server = mcpConfig.getServer(serverId);
-
     if (!server) {
-      return res.status(404).json({
-        success: false,
-        error: 'Сервер не найден',
-      });
+      return res.status(404).json({ success: false, error: 'Сервер не найден' });
     }
-
-    const result = await mcpClient.connect(serverId, server.url);
+    let result;
+    if (server.url) {
+      result = await mcpClient.connect(serverId, server.url);
+    } else if (server.command) {
+      result = await mcpClient.connectStdio(serverId, {
+        command: server.command,
+        args: server.args || [],
+        env: server.env || {},
+      });
+    } else {
+      return res.status(400).json({ success: false, error: 'У сервера нет url или command' });
+    }
     res.json(result);
   } catch (error) {
     console.error('❌ Error connecting to MCP server:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -1523,6 +1569,127 @@ app.post('/api/mcp/servers/:serverId/disconnect', async (req, res) => {
       success: false,
       error: error.message,
     });
+  }
+});
+
+// Редактор mcp.json (формат Cursor: mcpServers с command/args или url)
+function loadCursorMcpConfig() {
+  try {
+    if (fs.existsSync(CURSOR_MCP_FILE)) {
+      const raw = fs.readFileSync(CURSOR_MCP_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (data && typeof data === 'object' && (data.mcpServers === undefined || typeof data.mcpServers === 'object')) {
+        return data;
+      }
+    }
+  } catch (e) {
+    console.warn('cursor-mcp.json read failed:', e.message);
+  }
+  return { ...DEFAULT_CURSOR_MCP };
+}
+
+app.options('/api/cursor-mcp-config', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendStatus(204);
+});
+
+app.get('/api/cursor-mcp-config', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  try {
+    const config = loadCursorMcpConfig();
+    res.json({ success: true, config, raw: JSON.stringify(config, null, 2) });
+  } catch (error) {
+    console.error('❌ Error getting cursor MCP config:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/cursor-mcp-config', (req, res) => {
+  try {
+    const { raw } = req.body;
+    if (typeof raw !== 'string') {
+      return res.status(400).json({ success: false, error: 'raw (string) required' });
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return res.status(400).json({ success: false, error: 'Invalid JSON: root must be an object' });
+    }
+    if (parsed.mcpServers !== undefined && typeof parsed.mcpServers !== 'object') {
+      return res.status(400).json({ success: false, error: 'mcpServers must be an object' });
+    }
+    if (!parsed.mcpServers) {
+      parsed.mcpServers = {};
+    }
+    fs.writeFileSync(CURSOR_MCP_FILE, JSON.stringify(parsed, null, 2), 'utf8');
+    res.json({ success: true, config: parsed, raw: JSON.stringify(parsed, null, 2) });
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      return res.status(400).json({ success: false, error: `Invalid JSON: ${e.message}` });
+    }
+    console.error('❌ Error saving cursor MCP config:', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Подгрузить серверы из cursor-mcp.json (url и stdio) в приложение и подключиться
+app.post('/api/mcp/servers/sync-from-cursor-config', async (req, res) => {
+  try {
+    const cursorConfig = loadCursorMcpConfig();
+    const mcpServers = cursorConfig.mcpServers || {};
+    const added = [];
+    const skipped = [];
+    for (const [name, config] of Object.entries(mcpServers)) {
+      if (!config || typeof config !== 'object') continue;
+      const id = name.trim().toLowerCase().replace(/\s+/g, '-') || name;
+      const existing = mcpConfig.getServer(id);
+      if (existing) {
+        skipped.push({ id, name, reason: 'already exists' });
+        continue;
+      }
+      const url = config.url;
+      const command = config.command;
+      const args = Array.isArray(config.args) ? config.args : [];
+      const env = config.env && typeof config.env === 'object' ? config.env : {};
+      const hasUrl = url != null && String(url).trim() !== '';
+      const hasCommand = command != null && String(command).trim() !== '';
+      if (!hasUrl && !hasCommand) continue;
+
+      const payload = {
+        id,
+        name: name.trim() || id,
+        enabled: true,
+        description: 'Импорт из mcp.json',
+      };
+      if (hasUrl) payload.url = url.trim();
+      else { payload.command = command.trim(); payload.args = args; payload.env = env; }
+
+      const result = mcpConfig.addServer(payload);
+      if (result.success) {
+        added.push({ id: result.server.id, name: result.server.name, type: hasUrl ? 'url' : 'stdio' });
+        try {
+          if (hasUrl) {
+            await mcpClient.connect(result.server.id, result.server.url);
+          } else {
+            await mcpClient.connectStdio(result.server.id, { command: result.server.command, args: result.server.args || [], env: result.server.env || {} });
+          }
+        } catch (err) {
+          console.warn(`Подключение к ${result.server.id} не удалось:`, err.message);
+        }
+      }
+    }
+    res.json({
+      success: true,
+      added,
+      skipped,
+      message: added.length > 0
+        ? `Добавлено серверов: ${added.length} (url и stdio).`
+        : skipped.length > 0
+          ? 'Все серверы уже есть в приложении.'
+          : 'В mcp.json нет серверов (url или command+args).',
+    });
+  } catch (error) {
+    console.error('❌ Error syncing from cursor config:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
